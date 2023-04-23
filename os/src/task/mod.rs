@@ -17,8 +17,11 @@ mod task;
 use crate::config::MAX_APP_NUM;
 use crate::loader::{get_num_app, init_app_cx};
 use crate::sync::UPSafeCell;
+use crate::task::task::TaskInfo;
+use crate::timer;
 use lazy_static::*;
 use switch::__switch;
+use task::TASK_INFO_BLOCK;
 pub use task::{TaskControlBlock, TaskStatus};
 
 pub use context::TaskContext;
@@ -54,10 +57,12 @@ lazy_static! {
         let mut tasks = [TaskControlBlock {
             task_cx: TaskContext::zero_init(),
             task_status: TaskStatus::UnInit,
+            task_info_ptr: &TASK_INFO_BLOCK[0],
         }; MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
             task.task_status = TaskStatus::Ready;
+            task.task_info_ptr = &TASK_INFO_BLOCK[i]
         }
         TaskManager {
             num_app,
@@ -81,10 +86,13 @@ impl TaskManager {
         let task0 = &mut inner.tasks[0];
         task0.task_status = TaskStatus::Running;
         let next_task_cx_ptr = &task0.task_cx as *const TaskContext;
+        let task_info_ptr = task0.task_info_ptr as *const TaskInfo as *mut TaskInfo;
         drop(inner);
         let mut _unused = TaskContext::zero_init();
         // before this, we should drop local variables that must be dropped manually
+        let time = timer::get_time();
         unsafe {
+            (*task_info_ptr).task_start_time = time;
             __switch(&mut _unused as *mut TaskContext, next_task_cx_ptr);
         }
         panic!("unreachable in run_first_task!");
@@ -125,15 +133,32 @@ impl TaskManager {
             inner.current_task = next;
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
+            let next_task_info_ptr = inner.tasks[next].task_info_ptr as *const TaskInfo as *mut TaskInfo;
             drop(inner);
+            let time = timer::get_time();
             // before this, we should drop local variables that must be dropped manually
             unsafe {
+                if (*next_task_info_ptr).task_start_time == 0 {
+                    (*next_task_info_ptr).task_start_time = time;
+                }
                 __switch(current_task_cx_ptr, next_task_cx_ptr);
             }
             // go back to user mode
         } else {
             panic!("All applications completed!");
         }
+    }
+    fn syscall_plus(&self, syscall: usize) {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let current_task_info_ptr = inner.tasks[current].task_info_ptr as *const TaskInfo as *mut TaskInfo;
+        unsafe {(*current_task_info_ptr).syscall_times[syscall] += 1}
+    }
+
+    fn task_info(&self) -> &'static TaskInfo {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        inner.tasks[current].task_info_ptr
     }
 }
 
@@ -168,4 +193,14 @@ pub fn suspend_current_and_run_next() {
 pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
+}
+
+/// the syscall times plus one
+pub fn syscall_plus(syscall: usize) {
+    TASK_MANAGER.syscall_plus(syscall)
+}
+
+/// Get a shared ptr to current taskInfo
+pub fn task_info() -> &'static TaskInfo {
+    TASK_MANAGER.task_info()
 }
