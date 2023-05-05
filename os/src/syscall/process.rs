@@ -1,9 +1,9 @@
 //! Process management syscalls
 use crate::{
-    config::MAX_SYSCALL_NUM,
+    config::{MAX_SYSCALL_NUM, CLOCK_FREQ},
     task::{
-        change_program_brk, exit_current_and_run_next, suspend_current_and_run_next, TaskStatus,
-    },
+        change_program_brk, exit_current_and_run_next, suspend_current_and_run_next, TaskStatus, TaskInfo as Info, current_user_mem_set
+    }, timer::{get_time, get_time_us}, mm::{VirtAddr, MapPermission},
 };
 
 #[repr(C)]
@@ -43,7 +43,17 @@ pub fn sys_yield() -> isize {
 /// HINT: What if [`TimeVal`] is splitted by two pages ?
 pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
     trace!("kernel: sys_get_time");
-    -1
+    let time = get_time_us();
+    let sec = time / 1000000;
+    let usec = time % 1000000;
+    if let Some(prt) = VirtAddr(_ts as usize).get_mut() {
+        *prt = TimeVal {
+            sec, usec
+        };
+        0
+    } else {
+        -1
+    }
 }
 
 /// YOUR JOB: Finish sys_task_info to pass testcases
@@ -51,13 +61,33 @@ pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
 /// HINT: What if [`TaskInfo`] is splitted by two pages ?
 pub fn sys_task_info(_ti: *mut TaskInfo) -> isize {
     trace!("kernel: sys_task_info NOT IMPLEMENTED YET!");
-    -1
+    let taskinfo = Info::taskinfo_va().get_mut::<Info>().unwrap();
+    if let Some(ptr) = VirtAddr(_ti as usize).get_mut::<TaskInfo>() {
+        let _time = get_time() - taskinfo.start_time;
+        let time = _time / (CLOCK_FREQ / 1000);
+        ptr.status = TaskStatus::Running;
+        ptr.time = time;
+        ptr.syscall_times = taskinfo.syscall_times;
+        0
+    } else {
+        -1
+    }
 }
 
 // YOUR JOB: Implement mmap.
 pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
     trace!("kernel: sys_mmap NOT IMPLEMENTED YET!");
-    -1
+    let start = VirtAddr(_start);
+    let end = VirtAddr(_start + _len);
+    if !((_port & !7usize) == 0) { return -1 }
+    if !VirtAddr(_start).aligned() {return -1 }
+    let mem_set = current_user_mem_set();
+    if mem_set.already_in_range(start, end) {return -1}
+    let permis = {
+        (_port << 1) as u8
+    };
+    mem_set.mmap(start, end, MapPermission::from_bits(permis).unwrap());
+    0
 }
 
 // YOUR JOB: Implement munmap.

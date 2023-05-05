@@ -1,6 +1,6 @@
 //! Implementation of physical and virtual address and page number.
-use super::PageTableEntry;
-use crate::config::{PAGE_SIZE, PAGE_SIZE_BITS};
+use super::{PageTableEntry, KERNEL_SPACE};
+use crate::{config::{PAGE_SIZE, PAGE_SIZE_BITS}};
 use core::fmt::{self, Debug, Formatter};
 /// physical address
 const PA_WIDTH_SV39: usize = 56;
@@ -175,6 +175,15 @@ impl PhysAddr {
         unsafe { (self.0 as *mut T).as_mut().unwrap() }
     }
 }
+
+impl VirtAddr {
+    
+    /// Translate VA to &mut T
+    pub fn get_mut<T>(&self) -> Option<&'static mut T> {
+        KERNEL_SPACE.exclusive_access().map_tmp(self.0 as *mut T)
+    }
+}
+
 impl PhysPageNum {
     /// Get the reference of page table(array of ptes)
     pub fn get_pte_array(&self) -> &'static mut [PageTableEntry] {

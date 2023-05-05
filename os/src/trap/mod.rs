@@ -15,9 +15,10 @@
 mod context;
 
 use crate::config::{TRAMPOLINE, TRAP_CONTEXT_BASE};
+use crate::mm::KERNEL_SPACE;
 use crate::syscall::syscall;
 use crate::task::{
-    current_trap_cx, current_user_token, exit_current_and_run_next, suspend_current_and_run_next,
+    current_trap_cx, current_user_token, exit_current_and_run_next, suspend_current_and_run_next, syscall_plus,
 };
 use crate::timer::set_next_trigger;
 use core::arch::{asm, global_asm};
@@ -66,6 +67,7 @@ pub fn trap_handler() -> ! {
             // jump to next instruction anyway
             cx.sepc += 4;
             // get system call return value
+            syscall_plus(cx.x[17]);
             cx.x[10] = syscall(cx.x[17], [cx.x[10], cx.x[11], cx.x[12]]) as usize;
         }
         Trap::Exception(Exception::StoreFault)
@@ -101,6 +103,7 @@ pub fn trap_handler() -> ! {
 /// set the reg a0 = trap_cx_ptr, reg a1 = phy addr of usr page table,
 /// finally, jump to new addr of __restore asm function
 pub fn trap_return() -> ! {
+    KERNEL_SPACE.exclusive_access().unmap_tmp();
     set_user_trap_entry();
     let trap_cx_ptr = TRAP_CONTEXT_BASE;
     let user_satp = current_user_token();

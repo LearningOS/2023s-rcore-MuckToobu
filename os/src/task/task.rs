@@ -1,6 +1,6 @@
 //! Types related to task management
 use super::TaskContext;
-use crate::config::TRAP_CONTEXT_BASE;
+use crate::config::{TRAP_CONTEXT_BASE, MAX_SYSCALL_NUM, TRAMPOLINE};
 use crate::mm::{
     kernel_stack_position, MapPermission, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE,
 };
@@ -28,6 +28,22 @@ pub struct TaskControlBlock {
 
     /// Program break
     pub program_brk: usize,
+}
+
+/// TaskInfo, located at `TRAMPOLINE - sizeof(TaskInfo)`
+#[repr(C)]
+pub struct TaskInfo {
+    /// start time
+    pub start_time: usize,
+    /// syscall times
+    pub syscall_times: [u32; MAX_SYSCALL_NUM],
+}
+
+impl TaskInfo {
+    /// the virtual address of TaskInfo
+    pub fn taskinfo_va() -> VirtAddr {
+        (TRAMPOLINE - core::mem::size_of::<TaskInfo>()).into()
+    }
 }
 
 impl TaskControlBlock {

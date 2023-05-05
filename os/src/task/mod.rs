@@ -15,12 +15,14 @@ mod switch;
 mod task;
 
 use crate::loader::{get_app_data, get_num_app};
+use crate::mm::MemorySet;
 use crate::sync::UPSafeCell;
+use crate::timer::get_time;
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
 use lazy_static::*;
 use switch::__switch;
-pub use task::{TaskControlBlock, TaskStatus};
+pub use task::{TaskControlBlock, TaskStatus, TaskInfo};
 
 pub use context::TaskContext;
 
@@ -82,6 +84,8 @@ impl TaskManager {
         let next_task_cx_ptr = &next_task.task_cx as *const TaskContext;
         drop(inner);
         let mut _unused = TaskContext::zero_init();
+        let taskinfo = TaskInfo::taskinfo_va().get_mut::<TaskInfo>().unwrap();
+        taskinfo.start_time = get_time();
         // before this, we should drop local variables that must be dropped manually
         unsafe {
             __switch(&mut _unused as *mut _, next_task_cx_ptr);
@@ -126,6 +130,13 @@ impl TaskManager {
         inner.tasks[inner.current_task].get_trap_cx()
     }
 
+    fn get_current_mem_set(&self) -> &'static mut MemorySet {
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let ptr = &mut inner.tasks[current].memory_set as *mut MemorySet;
+        unsafe {ptr.as_mut().unwrap()}
+    }
+
     /// Change the current 'Running' task's program break
     pub fn change_current_program_brk(&self, size: i32) -> Option<usize> {
         let mut inner = self.inner.exclusive_access();
@@ -144,6 +155,8 @@ impl TaskManager {
             let current_task_cx_ptr = &mut inner.tasks[current].task_cx as *mut TaskContext;
             let next_task_cx_ptr = &inner.tasks[next].task_cx as *const TaskContext;
             drop(inner);
+            let taskinfo = TaskInfo::taskinfo_va().get_mut::<TaskInfo>().unwrap();
+            if taskinfo.start_time == 0 {taskinfo.start_time = get_time()}
             // before this, we should drop local variables that must be dropped manually
             unsafe {
                 __switch(current_task_cx_ptr, next_task_cx_ptr);
@@ -201,4 +214,16 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+
+/// Get the current task MemorySet.
+pub fn current_user_mem_set() -> &'static mut MemorySet {
+    TASK_MANAGER.get_current_mem_set()
+}
+
+/// syscall + 1
+pub fn syscall_plus(syscall_id: usize) {
+    let taskinfo = TaskInfo::taskinfo_va().get_mut::<TaskInfo>().unwrap();
+    taskinfo.syscall_times[syscall_id] += 1;
 }
